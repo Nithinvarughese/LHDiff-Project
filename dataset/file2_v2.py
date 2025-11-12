@@ -1,12 +1,14 @@
-def list_even(limit):  # renamed function
-    return [x for x in range(limit) if x % 2 == 0]
-def list_odd(limit):
-    odds = [x for x in range(limit) if x % 2 != 0]  # added variable
-    return odds
-def sum_numbers(nums):
-    return sum(nums)  # used built-in sum
-def max_number(nums):
-    max_val = max(nums)  # added variable
-    return max_val
-def min_number(nums):
-    return min(nums)  # unchanged
+def greet(name):
+    print(f"Hi, {name}!")  # changed greeting
+def farewell_user(name):
+    print(f"See you, {name}!")  # changed farewell message
+def get_full_name(first_name, last_name):  # renamed parameters
+    full = first_name + " " + last_name
+    return full
+def age_next_year(age):
+    return age + 1
+def favorite_colors():
+    colors = ["red", "green", "blue", "yellow", "purple"]  # added color
+    return colors
+def print_info(name, age):
+    print(f"{name} will be {age} next year.")  # modified output

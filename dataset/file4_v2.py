@@ -1,18 +1,19 @@
-# file5_v2.py
+# file4_v2.py
 
-def square_number(n):  # renamed function
-    return n * n
+def reverse_str(s):  # renamed function
+    reversed_s = s[::-1]
+    return reversed_s
 
-def cube(n):
-    result = n ** 3  # added variable
-    return result
+def count_vowels(s):
+    vowels = sum(1 for c in s if c.lower() in "aeiou")
+    return vowels
 
-def power(base, exp):  # renamed parameter
-    return base ** exp
+def count_consonants(s):
+    return sum(1 for c in s if c.isalpha() and c.lower() not in "aeiou")
 
-def list_powers(n):
-    return [i**2 for i in range(n+1)]  # include n
+def is_palindrome(s):
+    s_clean = s.replace(" ", "").lower()
+    return s_clean == s_clean[::-1]
 
-def print_numbers(n):
-    for i in range(n):
-        print(f"Number: {i}")  # changed print format
+def string_summary(s):
+    print(f"'{s}' has length {len(s)}")  # changed format

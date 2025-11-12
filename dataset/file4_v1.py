@@ -1,17 +1,16 @@
-# file5_v1.py
+# file4_v1.py
 
-def square(n):
-    return n * n
+def reverse_string(s):
+    return s[::-1]
 
-def cube(n):
-    return n ** 3
+def count_vowels(s):
+    return sum(1 for c in s if c.lower() in "aeiou")
 
-def power(base, exponent):
-    return base ** exponent
+def count_consonants(s):
+    return sum(1 for c in s if c.isalpha() and c.lower() not in "aeiou")
 
-def list_powers(n):
-    return [i**2 for i in range(n)]
+def is_palindrome(s):
+    return s == s[::-1]
 
-def print_numbers(n):
-    for i in range(n):
-        print(i)
+def string_summary(s):
+    print(f"String: {s}, Length: {len(s)}")

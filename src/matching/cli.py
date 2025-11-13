@@ -46,4 +46,4 @@ def main():
     rows = [f"{i+1}->{j+1}" for i, j in sorted(res.left_to_right.items())]
 
     if args.out:
-        with open(args.out, "w", encodin
+        with open(args.out, "w", encodin)

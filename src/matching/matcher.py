@@ -1,3 +1,4 @@
+"""matcher code"""
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from .similarity import norm_levenshtein, context_cosine, get_context

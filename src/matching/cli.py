@@ -8,6 +8,7 @@ try:
 except Exception:
     _pp = None
 
+
 def _read_lines(path: str) -> List[str]:
     if _pp is not None:
         return _pp(path)
@@ -19,7 +20,8 @@ def _read_lines(path: str) -> List[str]:
                 out.append(s)
     return out
 
-def main():
+
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--old", required=True)
     ap.add_argument("--new", required=True)
@@ -35,15 +37,28 @@ def main():
     right_lines: List[str] = _read_lines(args.new)
 
     res = match_lines(
-        left_lines, right_lines,
+        left_lines,
+        right_lines,
         candidates=None,
         get_context_fn=lambda L, i, r: get_context(L, i, r, include_center=False),
-        w_content=args.w_content, w_context=args.w_context,
-        threshold=args.threshold, radius=args.radius,
-        all_pairs_if_none=True, tie_break="stable",
+        w_content=args.w_content,
+        w_context=args.w_context,
+        threshold=args.threshold,
+        radius=args.radius,
+        all_pairs_if_none=True,
+        tie_break="stable",
     )
 
-    rows = [f"{i+1}->{j+1}" for i, j in sorted(res.left_to_right.items())]
+    rows = [f"{i + 1}->{j + 1}" for i, j in sorted(res.left_to_right.items())]
 
     if args.out:
-        with open(args.out, "w", encodin)
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+
+    if args.print:
+        for row in rows:
+            print(row)
+
+
+if __name__ == "__main__":
+    main()

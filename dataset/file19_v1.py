@@ -1,69 +1,49 @@
-import sys
-import sysconfig
-import weakref
-from pathlib import Path
+# -*- coding: utf-8 -*-
+import time
+from calendar import isleap
 
-import pytest
-
-import numpy as np
-from numpy.ctypeslib import as_array, load_library, ndpointer
-from numpy.testing import assert_, assert_array_equal, assert_equal, assert_raises
-
-try:
-    import ctypes
-except ImportError:
-    ctypes = None
-else:
-    cdll = None
-    test_cdll = None
-    if hasattr(sys, 'gettotalrefcount'):
-        try:
-            cdll = load_library(
-                '_multiarray_umath_d', np._core._multiarray_umath.__file__
-            )
-        except OSError:
-            pass
-        try:
-            test_cdll = load_library(
-                '_multiarray_tests', np._core._multiarray_tests.__file__
-            )
-        except OSError:
-            pass
-    if cdll is None:
-        cdll = load_library(
-            '_multiarray_umath', np._core._multiarray_umath.__file__)
-    if test_cdll is None:
-        test_cdll = load_library(
-            '_multiarray_tests', np._core._multiarray_tests.__file__
-        )
-
-    c_forward_pointer = test_cdll.forward_pointer
+# judge the leap year
+def judge_leap_year(year):
+    if isleap(year):
+        return True
+    else:
+        return False
 
 
-@pytest.mark.skipif(ctypes is None,
-                    reason="ctypes not available in this python")
-@pytest.mark.skipif(sys.platform == 'cygwin',
-                    reason="Known to fail on cygwin")
-class TestLoadLibrary:
-    def test_basic(self):
-        loader_path = np._core._multiarray_umath.__file__
+# returns the number of days in each month
+def month_days(month, leap_year):
+    if month in [1, 3, 5, 7, 8, 10, 12]:
+        return 31
+    elif month in [4, 6, 9, 11]:
+        return 30
+    elif month == 2 and leap_year:
+        return 29
+    elif month == 2 and (not leap_year):
+        return 28
 
-        out1 = load_library('_multiarray_umath', loader_path)
-        out2 = load_library(Path('_multiarray_umath'), loader_path)
-        out3 = load_library('_multiarray_umath', Path(loader_path))
-        out4 = load_library(b'_multiarray_umath', loader_path)
 
-        assert isinstance(out1, ctypes.CDLL)
-        assert out1 is out2 is out3 is out4
+name = input("input your name: ")
+age = input("input your age: ")
+localtime = time.localtime(time.time())
 
-    def test_basic2(self):
-        # Regression for #801: load_library with a full library name
-        # (including extension) does not work.
-        try:
-            so_ext = sysconfig.get_config_var('EXT_SUFFIX')
-            load_library(f'_multiarray_umath{so_ext}',
-                         np._core._multiarray_umath.__file__)
-        except ImportError as e:
-            msg = ("ctypes is not available on this python: skipping the test"
-                   " (import error was: %s)" % str(e))
-            print(msg)
+year = int(age)
+month = year * 12 + localtime.tm_mon
+day = 0
+
+begin_year = int(localtime.tm_year) - year
+end_year = begin_year + year
+
+# calculate the days
+for y in range(begin_year, end_year):
+    if (judge_leap_year(y)):
+        day = day + 366
+    else:
+        day = day + 365
+
+leap_year = judge_leap_year(localtime.tm_year)
+for m in range(1, localtime.tm_mon):
+    day = day + month_days(m, leap_year)
+
+day = day + localtime.tm_mday
+print("%s's age is %d years or " % (name, year), end="")
+print("%d months or %d days" % (month, day))

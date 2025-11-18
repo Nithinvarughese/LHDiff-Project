@@ -1,0 +1,16 @@
+
+import difflib
+
+def preprocess_file(file_content):
+    """
+    Implements Step 1: PREPROCESSING. Each line of a source file is normalized 
+    by converting it to lowercase and removing extra whitespace.
+    """
+    normalized_lines = []
+    for line in file_content:
+        # [cite_start]Normalize: Convert to lowercase [cite: 180, 195]
+        # and strip leading/trailing whitespace to standardize the line.
+        normalized_line = line.strip().lower()
+        normalized_lines.append(normalized_line)
+    return normalized_lines
+

@@ -1,12 +1,14 @@
-"""matcher code"""
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
+
 from .similarity import norm_levenshtein, context_cosine, get_context
+
 
 @dataclass(frozen=True)
 class MatchResult:
     left_to_right: Dict[int, int]
     scores: Dict[Tuple[int, int], float]
+
 
 class Matcher:
     def __init__(
@@ -18,85 +20,89 @@ class Matcher:
         w_context: float = 0.4,
         threshold: float = 0.55,
         radius: int = 4,
-    ):
-        self.L = left_lines
-        self.R = right_lines
-        self.get_context = get_context_fn
-        self.wc = w_content
-        self.wx = w_context
+    ) -> None:
+        self.left_lines = left_lines
+        self.right_lines = right_lines
+        self.get_context_fn = get_context_fn
+        self.w_content = w_content
+        self.w_context = w_context
         self.threshold = threshold
         self.radius = radius
-        self._ctxL: Dict[int, List[str]] = {}
-        self._ctxR: Dict[int, List[str]] = {}
+        self._left_ctx = [
+            self.get_context_fn(left_lines, i, radius)
+            for i in range(len(left_lines))
+        ]
+        self._right_ctx = [
+            self.get_context_fn(right_lines, i, radius)
+            for i in range(len(right_lines))
+        ]
+        self._score_cache: Dict[Tuple[int, int], float] = {}
 
-    def _ctx_left(self, i: int) -> List[str]:
-        if i not in self._ctxL:
-            self._ctxL[i] = self.get_context(self.L, i, self.radius)
-        return self._ctxL[i]
-
-    def _ctx_right(self, j: int) -> List[str]:
-        if j not in self._ctxR:
-            self._ctxR[j] = self.get_context(self.R, j, self.radius)
-        return self._ctxR[j]
-
-    def _combined(self, i: int, j: int) -> float:
-        c = norm_levenshtein(self.L[i], self.R[j])
-        x = context_cosine(self._ctx_left(i), self._ctx_right(j))
-        return self.wc * c + self.wx * x
-
-    def score_pairs(
-        self,
-        candidates: Optional[Dict[int, Iterable[int]]] = None,
-        all_pairs_if_none: bool = True,
-    ) -> Dict[Tuple[int, int], float]:
-        scored: Dict[Tuple[int, int], float] = {}
-        if candidates is None and all_pairs_if_none:
-            candidates = {i: range(len(self.R)) for i in range(len(self.L))}
-        elif candidates is None:
-            return scored
-        for i, js in candidates.items():
-            for j in js:
-                s = self._combined(i, j)
-                if s >= self.threshold:
-                    scored[(i, j)] = s
-        return scored
-
-    def greedy_one_to_one(
-        self,
-        scored_pairs: Dict[Tuple[int, int], float],
-        tie_break: str = "stable",
-    ) -> Dict[int, int]:
-        if tie_break == "stable":
-            keyf = lambda it: (-it[1], abs(it[0][0] - it[0][1]), it[0][0], it[0][1])
-        elif tie_break == "left":
-            keyf = lambda it: (-it[1], it[0][0], it[0][1])
-        else:
-            keyf = lambda it: (-it[1], it[0][1], it[0][0])
-        mapping: Dict[int, int] = {}
-        usedL, usedR = set(), set()
-        for (i, j), s in sorted(scored_pairs.items(), key=keyf):
-            if i in usedL or j in usedR:
-                continue
-            mapping[i] = j
-            usedL.add(i)
-            usedR.add(j)
-        return mapping
+    def _pair_score(self, i: int, j: int) -> float:
+        key = (i, j)
+        if key in self._score_cache:
+            return self._score_cache[key]
+        s_content = norm_levenshtein(self.left_lines[i], self.right_lines[j])
+        s_context = context_cosine(self._left_ctx[i], self._right_ctx[j])
+        score = self.w_content * s_content + self.w_context * s_context
+        self._score_cache[key] = score
+        return score
 
     def match(
         self,
-        candidates: Optional[Dict[int, Iterable[int]]] = None,
+        candidates: Optional[Dict[int, List[int]]] = None,
         all_pairs_if_none: bool = True,
         tie_break: str = "stable",
     ) -> MatchResult:
-        scored = self.score_pairs(candidates, all_pairs_if_none)
-        mapping = self.greedy_one_to_one(scored, tie_break=tie_break)
-        used_scores = {(i, j): scored[(i, j)] for i, j in mapping.items()}
-        return MatchResult(mapping, used_scores)
+        n_left = len(self.left_lines)
+        n_right = len(self.right_lines)
+        if candidates is None:
+            if all_pairs_if_none:
+                candidates = {i: list(range(n_right)) for i in range(n_left)}
+            else:
+                candidates = {}
+        left_to_right: Dict[int, int] = {}
+        scores: Dict[Tuple[int, int], float] = {}
+        right_owner: Dict[int, int] = {}
+        for i in range(n_left):
+            cand_js = candidates.get(i)
+            if not cand_js:
+                continue
+            best_j: Optional[int] = None
+            best_score: float = self.threshold
+            for j in cand_js:
+                if j < 0 or j >= n_right:
+                    continue
+                s = self._pair_score(i, j)
+                scores[(i, j)] = s
+                if s >= best_score:
+                    best_score = s
+                    best_j = j
+            if best_j is None:
+                continue
+            owner = right_owner.get(best_j)
+            if owner is None:
+                left_to_right[i] = best_j
+                right_owner[best_j] = i
+            else:
+                if tie_break == "max":
+                    old_score = scores.get(
+                        (owner, best_j), self._pair_score(owner, best_j)
+                    )
+                    if best_score > old_score:
+                        left_to_right.pop(owner, None)
+                        left_to_right[i] = best_j
+                        right_owner[best_j] = i
+                else:
+                    continue
+        return MatchResult(left_to_right=left_to_right, scores=scores)
+
 
 def match_lines(
     left_lines: List[str],
     right_lines: List[str],
-    candidates: Optional[Dict[int, Iterable[int]]] = None,
+    candidates: Optional[Dict[int, List[int]]] = None,
+    *,
     get_context_fn: Callable[[List[str], int, int], List[str]] = get_context,
     w_content: float = 0.6,
     w_context: float = 0.4,
@@ -105,10 +111,17 @@ def match_lines(
     all_pairs_if_none: bool = True,
     tie_break: str = "stable",
 ) -> MatchResult:
-    m = Matcher(
-        left_lines, right_lines,
+    matcher = Matcher(
+        left_lines=left_lines,
+        right_lines=right_lines,
         get_context_fn=get_context_fn,
-        w_content=w_content, w_context=w_context,
-        threshold=threshold, radius=radius,
+        w_content=w_content,
+        w_context=w_context,
+        threshold=threshold,
+        radius=radius,
     )
-    return m.match(candidates, all_pairs_if_none, tie_break)
+    return matcher.match(
+        candidates=candidates,
+        all_pairs_if_none=all_pairs_if_none,
+        tie_break=tie_break,
+    )

@@ -1,37 +1,99 @@
-# -*- coding: utf-8 -*-
-import time
-from calendar import isleap
+import sys
+import sysconfig
+import weakref
+from pathlib import Path
 
-def is_leap_year(y):
-    return isleap(y)
+# re-ordered pytest and numpy imports + small additions
+import pytest
+import numpy as np
+from numpy.ctypeslib import as_array, load_library, ndpointer
+from numpy.testing import (
+    assert_,
+    assert_array_equal,
+    assert_equal,
+    assert_raises,
+)
 
-def days_in_month(m, leap):
-    if m in [1, 3, 5, 7, 8, 10, 12]:
-        return 31
-    elif m in [4, 6, 9, 11]:
-        return 30
-    elif m == 2 and leap:
-        return 29
+# new constant added for variation
+TEST_FLAG = True
+
+try:
+    import ctypes
+except ImportError:
+    ctypes = None
+else:
+    cdll = None
+    test_cdll = None
+
+    # changed condition: reversed logic for demonstration
+    if not hasattr(sys, "gettotalrefcount"):
+        try:
+            cdll = load_library("_multiarray_umath", np._core._multiarray_umath.__file__)
+        except OSError:
+            cdll = None
     else:
-        return 28
+        # changed loading order
+        try:
+            test_cdll = load_library(
+                "_multiarray_tests", np._core._multiarray_tests.__file__
+            )
+        except OSError:
+            pass
 
-name = input("Enter your name: ")
-age = int(input("Enter your age: "))
-now = time.localtime()
+        try:
+            cdll = load_library(
+                "_multiarray_umath_d", np._core._multiarray_umath.__file__
+            )
+        except OSError:
+            cdll = None
 
-years = age
-months = years * 12 + now.tm_mon
-days = 0
+    # changed fallback chain
+    if test_cdll is None:
+        test_cdll = load_library("_multiarray_tests", np._core._multiarray_tests.__file__)
 
-start_year = now.tm_year - years
-end_year = start_year + years
+    if cdll is None:
+        cdll = load_library("_multiarray_umath", np._core._multiarray_umath.__file__)
 
-for y in range(start_year, end_year):
-    days += 366 if is_leap_year(y) else 365
+    # changed exported symbol
+    c_forward_pointer = getattr(test_cdll, "forward_pointer", None)
 
-leap = is_leap_year(now.tm_year)
-for m in range(1, now.tm_mon):
-    days += days_in_month(m, leap)
 
-days += now.tm_mday
-print(f"{name}'s age is {years} years or {months} months or {days} days")
+@pytest.mark.skipif(
+    ctypes is None, reason="ctypes not available in this Python environment"
+)
+@pytest.mark.skipif(
+    sys.platform != "cygwin",  # logic flipped for variation
+    reason="Only run this on cygwin in this modified version",
+)
+class TestLoadLibrary:
+    def test_basic(self):
+        loader_path = np._core._multiarray_umath.__file__
+
+        # argument order changed + added new variant
+        out1 = load_library("_multiarray_umath", loader_path)
+        out2 = load_library(loader_path, "_multiarray_umath")  # new swapped-args case
+        out3 = load_library("_multiarray_umath", Path(loader_path))
+        out4 = load_library(b"_multiarray_umath", loader_path)
+
+        assert isinstance(out1, ctypes.CDLL)
+        # changed assertion: now ensure out1 is NOT out2
+        assert out1 is not out2
+        assert out3 is out4
+
+    def test_basic2(self):
+        # modified regression test: now expect exception for invalid combo
+        so_ext = sysconfig.get_config_var("EXT_SUFFIX")
+        full_name = f"_multiarray_umath{so_ext}"
+
+        with pytest.raises(Exception):  # changed: test now expects failure
+            load_library(full_name, np._core._multiarray_umath.__file__)
+
+
+# new test block added for additional changes
+@pytest.mark.skipif(ctypes is None, reason="ctypes unavailable")
+def test_forward_pointer_exists():
+    # changed: now check pointer is NOT None
+    assert c_forward_pointer is not None
+
+    # new assertion
+    assert callable(c_forward_pointer) or hasattr(c_forward_pointer, "__call__")

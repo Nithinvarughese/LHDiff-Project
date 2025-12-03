@@ -1,579 +1,455 @@
-
-"""
-LHDiff - Complete Implementation
-A language-independent hybrid line mapping technique
-
-This combines all components:
-1. Preprocessing
-2. Unchanged line detection (Unix diff)
-3. SimHash candidate generation
-4. Content + Context similarity matching
-5. Split detection
-"""
-
-import hashlib
-import re
-import argparse
+import argparse, difflib, hashlib, math, re
 from collections import Counter
-from math import sqrt
-from typing import List, Dict, Tuple, Optional
-import difflib
+from statistics import median
 
-
-# ============================================================================
-# PREPROCESSING MODULE
-# ============================================================================
-
-def normalize_line(line: str) -> str:
-    """Normalize a single line: lowercase and collapse whitespace"""
+# ===================== Step 1: PREPROCESSING =====================
+def normalize(line: str) -> str:
+    line = line.rstrip("\n")
+    # remove comment tails (python/c/cpp generic)
+    line = re.sub(r"#.*$", "", line)
+    line = re.sub(r"//.*$", "", line)
+    line = re.sub(r"/\*.*?\*/", " ", line)
     line = line.strip().lower()
-    return " ".join(line.split())
+    line = " ".join(line.split())
+    return line
 
+def read_kept(path: str):
+    """Return original lines, normalized non-empty lines, and kept_idx -> original_idx."""
+    with open(path, "r", encoding="utf-8") as f:
+        orig = [l.rstrip("\n") for l in f.readlines()]
+    kept, k2o = [], []
+    for i, l in enumerate(orig):
+        n = normalize(l)
+        if n.strip():
+            kept.append(n)
+            k2o.append(i)
+    return orig, kept, k2o
 
-def preprocess_lines(lines: List[str]) -> List[str]:
-    """Preprocess a list of lines"""
-    return [normalize_line(line) for line in lines if line.strip()]
+def strip_ws(s: str) -> str:
+    return re.sub(r"\s+", "", s)
 
+def get_context(lines, i, r=4):
+    lo, hi = max(0, i-r), min(len(lines), i+r+1)
+    return lines[lo:i] + lines[i+1:hi]
 
-def read_and_preprocess(filepath: str) -> List[str]:
-    """Read file and return preprocessed lines"""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return preprocess_lines(f.readlines())
+# ===================== Similarities =====================
+def lev_dist(a: str, b: str) -> int:
+    if a == b: return 0
+    if not a: return len(b)
+    if not b: return len(a)
+    if len(a) < len(b): a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(cur[j-1] + 1, prev[j] + 1, prev[j-1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
 
+def nlev_sim(a: str, b: str) -> float:
+    m = max(len(a), len(b))
+    return 1.0 if m == 0 else 1.0 - (lev_dist(a, b) / m)
 
-# ============================================================================
-# SIMHASH MODULE
-# ============================================================================
+def build_idf(old_lines, new_lines) -> dict:
+    docs = old_lines + new_lines
+    N = max(1, len(docs))
+    df = Counter()
+    for ln in docs:
+        for t in set(ln.split()):
+            df[t] += 1
+    return {t: (math.log((N + 1) / (df[t] + 1)) + 1.0) for t in df}
 
-def simhash(text: str, hash_bits: int = 64) -> int:
-    """Generate simhash fingerprint for text"""
-    tokens = text.split()
-    v = [0] * hash_bits
+def bow(lines, idf=None) -> Counter:
+    c = Counter()
+    for ln in lines:
+        for t in ln.split():
+            c[t] += (idf.get(t, 1.0) if idf else 1.0)
+    return c
 
-    for token in tokens:
-        h = int(hashlib.md5(token.encode('utf-8')).hexdigest(), 16)
-        for i in range(hash_bits):
-            if h & (1 << i):
-                v[i] += 1
-            else:
-                v[i] -= 1
-
-    fingerprint = 0
-    for i in range(hash_bits):
-        if v[i] >= 0:
-            fingerprint |= (1 << i)
-
-    return fingerprint
-
-
-def hamming_distance(hash1: int, hash2: int) -> int:
-    """Calculate hamming distance between two hashes"""
-    x = hash1 ^ hash2
-    dist = 0
-    while x:
-        dist += 1
-        x &= x - 1
-    return dist
-
-
-def generate_candidates(old_lines: List[str], new_lines: List[str], k: int = 15) -> Dict[int, List[int]]:
-    """Generate top-k candidates for each old line using simhash"""
-    candidates = {}
-    simhash_old = [simhash(line) for line in old_lines]
-    simhash_new = [simhash(line) for line in new_lines]
-
-    for i, old_hash in enumerate(simhash_old):
-        distances = []
-        for j, new_hash in enumerate(simhash_new):
-            dist = hamming_distance(old_hash, new_hash)
-            distances.append((j, dist))
-
-        distances.sort(key=lambda x: x[1])
-        candidates[i] = [idx for idx, _ in distances[:k]]
-
-    return candidates
-
-
-# ============================================================================
-# SIMILARITY MODULE
-# ============================================================================
-
-def levenshtein_distance(a: str, b: str) -> int:
-    """Calculate Levenshtein distance between two strings"""
-    if a == b:
-        return 0
-    if not a:
-        return len(b)
-    if not b:
-        return len(a)
-    
-    if len(a) < len(b):
-        a, b = b, a
-    
-    previous = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        current = [i]
-        for j, cb in enumerate(b, start=1):
-            insert_cost = current[j - 1] + 1
-            delete_cost = previous[j] + 1
-            replace_cost = previous[j - 1] + (ca != cb)
-            current.append(min(insert_cost, delete_cost, replace_cost))
-        previous = current
-    
-    return previous[-1]
-
-
-def normalized_levenshtein(a: str, b: str) -> float:
-    """Calculate normalized Levenshtein similarity (0 to 1)"""
-    if not a and not b:
-        return 1.0
-    
-    dist = levenshtein_distance(a, b)
-    max_len = max(len(a), len(b))
-    
-    if max_len == 0:
-        return 1.0
-    
-    return 1.0 - (dist / max_len)
-
-
-def get_context(lines: List[str], index: int, radius: int = 4) -> List[str]:
-    """Get context lines around a given index"""
-    lo = max(0, index - radius)
-    hi = min(len(lines), index + radius + 1)
-    return lines[lo:index] + lines[index + 1:hi]
-
-
-def bow_vector(lines: List[str]) -> Counter:
-    """Create bag-of-words vector from lines"""
-    counter = Counter()
-    for line in lines:
-        for token in line.split():
-            counter[token] += 1
-    return counter
-
-
-def cosine_similarity(v1: Counter, v2: Counter) -> float:
-    """Calculate cosine similarity between two bow vectors"""
+def cosine(v1: Counter, v2: Counter) -> float:
     if not v1 or not v2:
         return 0.0
-    
-    dot = sum(v1[term] * v2.get(term, 0) for term in v1)
-    
+    dot = sum(v1[k] * v2.get(k, 0.0) for k in v1)
     if dot == 0.0:
         return 0.0
-    
-    norm1 = sqrt(sum(c * c for c in v1.values()))
-    norm2 = sqrt(sum(c * c for c in v2.values()))
-    
-    if norm1 == 0.0 or norm2 == 0.0:
-        return 0.0
-    
-    return dot / (norm1 * norm2)
+    n1 = math.sqrt(sum(x * x for x in v1.values()))
+    n2 = math.sqrt(sum(x * x for x in v2.values()))
+    return 0.0 if n1 == 0.0 or n2 == 0.0 else dot / (n1 * n2)
 
+# ===================== Step 3: SIMHASH candidates (k=15) =====================
+def simhash(text: str, idf=None, bits: int = 64) -> int:
+    v = [0.0] * bits
+    for tok in text.split():
+        w = idf.get(tok, 1.0) if idf else 1.0
+        h = int(hashlib.md5(tok.encode("utf-8")).hexdigest(), 16)
+        for i in range(bits):
+            v[i] += w if (h >> i) & 1 else -w
+    out = 0
+    for i in range(bits):
+        if v[i] >= 0:
+            out |= (1 << i)
+    return out
 
-def context_similarity(left_ctx: List[str], right_ctx: List[str]) -> float:
-    """Calculate context similarity using cosine similarity"""
-    return cosine_similarity(bow_vector(left_ctx), bow_vector(right_ctx))
+def ham(a: int, b: int) -> int:
+    return (a ^ b).bit_count()
 
+def generate_candidates(old_lines, new_lines, idf, k=15, r=4):
+    old_fp = [simhash(old_lines[i] + " " + " ".join(get_context(old_lines, i, r)), idf) for i in range(len(old_lines))]
+    new_fp = [simhash(new_lines[j] + " " + " ".join(get_context(new_lines, j, r)), idf) for j in range(len(new_lines))]
+    cand = {}
+    for i in range(len(old_lines)):
+        ds = sorted(((j, ham(old_fp[i], new_fp[j])) for j in range(len(new_lines))), key=lambda x: x[1])
+        cand[i] = [j for j, _ in ds[:k]]
+    return cand
 
-# ============================================================================
-# UNCHANGED LINE DETECTION (Step 2)
-# ============================================================================
+# ===================== Step 2: Detect unchanged (diff) =====================
+def detect_unchanged(old_lines, new_lines):
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    mapping, used_o, used_n = {}, set(), set()
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for oi, nj in zip(range(i1, i2), range(j1, j2)):
+                mapping[oi] = [nj]
+                used_o.add(oi)
+                used_n.add(nj)
+    return mapping, used_o, used_n
 
-def detect_unchanged_lines(old_lines: List[str], new_lines: List[str]) -> Tuple[Dict[int, int], set, set]:
-    """
-    Use difflib to find unchanged lines
-    Returns: (mapping dict, used_old indices, used_new indices)
-    """
-    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+# ===================== Step 4: Match + resolve conflicts =====================
+def combined_score(old_lines, new_lines, idf, old_ctx_vecs, new_ctx_vecs, oi, nj, wc=0.6, wx=0.4):
+    content = nlev_sim(old_lines[oi], new_lines[nj])
+    context = cosine(old_ctx_vecs[oi], new_ctx_vecs[nj])
+    return wc * content + wx * context, content, context
+
+def resolve_matches(old_lines, new_lines, candidates, used_o, used_n, idf, r=4, threshold=0.55, wc=0.6, wx=0.4):
+    old_ctx_vecs = [bow(get_context(old_lines, i, r), idf) for i in range(len(old_lines))]
+    new_ctx_vecs = [bow(get_context(new_lines, j, r), idf) for j in range(len(new_lines))]
+
     mapping = {}
-    used_old = set()
-    used_new = set()
+    owner = {}     # new_index -> old_index
+    scores = {}    # (old,new) -> combined score
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == 'equal':
-            for old_idx, new_idx in zip(range(i1, i2), range(j1, j2)):
-                mapping[old_idx] = new_idx
-                used_old.add(old_idx)
-                used_new.add(new_idx)
-
-    return mapping, used_old, used_new
-
-
-# ============================================================================
-# MATCHING MODULE (Step 3 & 4)
-# ============================================================================
-
-class LHDiffMatcher:
-    """Main matching class that implements LHDiff algorithm"""
-    
-    def __init__(
-        self,
-        old_lines: List[str],
-        new_lines: List[str],
-        w_content: float = 0.6,
-        w_context: float = 0.4,
-        threshold: float = 0.55,
-        radius: int = 4,
-        k: int = 15
-    ):
-        self.old_lines = old_lines
-        self.new_lines = new_lines
-        self.w_content = w_content
-        self.w_context = w_context
-        self.threshold = threshold
-        self.radius = radius
-        self.k = k
-        
-        # Pre-compute contexts
-        self.old_contexts = [get_context(old_lines, i, radius) for i in range(len(old_lines))]
-        self.new_contexts = [get_context(new_lines, i, radius) for i in range(len(new_lines))]
-        
-        # Cache for similarity scores
-        self.score_cache = {}
-    
-    def compute_similarity(self, old_idx: int, new_idx: int) -> float:
-        """Compute combined similarity score for a pair of lines"""
-        key = (old_idx, new_idx)
-        if key in self.score_cache:
-            return self.score_cache[key]
-        
-        # Content similarity
-        content_sim = normalized_levenshtein(
-            self.old_lines[old_idx],
-            self.new_lines[new_idx]
-        )
-        
-        # Context similarity
-        context_sim = context_similarity(
-            self.old_contexts[old_idx],
-            self.new_contexts[new_idx]
-        )
-        
-        # Combined score
-        score = self.w_content * content_sim + self.w_context * context_sim
-        self.score_cache[key] = score
-        
-        return score
-    
-    def match_with_candidates(
-        self,
-        candidates: Dict[int, List[int]],
-        used_old: set,
-        used_new: set
-    ) -> Dict[int, int]:
-        """
-        Step 4: Match lines using candidates and resolve conflicts
-        """
-        mapping = {}
-        new_owner = {}  # Track which old line owns each new line
-        
-        for old_idx in range(len(self.old_lines)):
-            if old_idx in used_old:
-                continue
-            
-            if old_idx not in candidates or not candidates[old_idx]:
-                continue
-            
-            best_new_idx = None
-            best_score = self.threshold
-            
-            # Find best match among candidates
-            for new_idx in candidates[old_idx]:
-                if new_idx in used_new:
-                    continue
-                
-                score = self.compute_similarity(old_idx, new_idx)
-                
-                if score > best_score:
-                    best_score = score
-                    best_new_idx = new_idx
-            
-            if best_new_idx is None:
-                continue
-            
-            # Resolve conflicts (if new line already matched)
-            if best_new_idx in new_owner:
-                prev_old_idx = new_owner[best_new_idx]
-                prev_score = self.compute_similarity(prev_old_idx, best_new_idx)
-                
-                if best_score > prev_score:
-                    # New match is better, replace
-                    del mapping[prev_old_idx]
-                    mapping[old_idx] = best_new_idx
-                    new_owner[best_new_idx] = old_idx
-                # else: keep previous match
-            else:
-                # No conflict, add mapping
-                mapping[old_idx] = best_new_idx
-                new_owner[best_new_idx] = old_idx
-        
-        return mapping
-
-
-# ============================================================================
-# SPLIT DETECTION (Step 5)
-# ============================================================================
-
-def detect_splits(
-    old_lines: List[str],
-    new_lines: List[str],
-    mapping: Dict[int, int],
-    used_old: set,
-    used_new: set
-) -> Dict[int, List[int]]:
-    """
-    Detect line splits: one old line -> multiple new lines
-    """
-    split_mapping = {}
-    
-    for old_idx in range(len(old_lines)):
-        if old_idx in used_old:
+    for oi in range(len(old_lines)):
+        if oi in used_o:
             continue
-        
-        old_clean = re.sub(r'\s+', '', old_lines[old_idx])
-        
-        # Try to find consecutive new lines that reconstruct the old line
-        for start_idx in range(len(new_lines)):
-            if start_idx in used_new:
+
+        best_nj, best_s = None, threshold
+        for nj in candidates.get(oi, []):
+            if nj in used_n:
                 continue
-            
-            combined = ''
-            new_indices = []
-            
-            for new_idx in range(start_idx, len(new_lines)):
-                if new_idx in used_new:
-                    break
-                
-                combined += re.sub(r'\s+', '', new_lines[new_idx])
-                new_indices.append(new_idx)
-                
-                # Check if we've reconstructed the old line
-                similarity = normalized_levenshtein(old_clean, combined)
-                
-                if similarity > 0.8 and len(new_indices) > 1:
-                    split_mapping[old_idx] = new_indices
-                    used_old.add(old_idx)
-                    used_new.update(new_indices)
-                    break
-                
-                # Stop if combined is much longer than old
-                if len(combined) > len(old_clean) * 1.5:
-                    break
-            
-            if old_idx in split_mapping:
-                break
-    
-    return split_mapping
+            s, _, _ = combined_score(old_lines, new_lines, idf, old_ctx_vecs, new_ctx_vecs, oi, nj, wc, wx)
+            scores[(oi, nj)] = s
+            if s > best_s:
+                best_s, best_nj = s, nj
 
+        if best_nj is None:
+            continue
 
-# ============================================================================
-# MAIN LHDIFF ALGORITHM
-# ============================================================================
-
-def lhdiff(
-    old_file: str,
-    new_file: str,
-    w_content: float = 0.6,
-    w_context: float = 0.4,
-    threshold: float = 0.55,
-    radius: int = 4,
-    k: int = 15,
-    detect_splits_flag: bool = True
-) -> Dict[int, List[int]]:
-    """
-    Complete LHDiff algorithm
-    
-    Returns: mapping from old line numbers to new line numbers (1-indexed)
-             Each old line maps to a list of new lines (for splits)
-    """
-    
-    # Step 1: Preprocessing
-    old_lines = read_and_preprocess(old_file)
-    new_lines = read_and_preprocess(new_file)
-    
-    # Step 2: Detect unchanged lines
-    unchanged_mapping, used_old, used_new = detect_unchanged_lines(old_lines, new_lines)
-    
-    # Step 3: Generate candidates using SimHash
-    candidates = generate_candidates(old_lines, new_lines, k=k)
-    
-    # Filter candidates to only unused lines
-    for old_idx in candidates:
-        if old_idx not in used_old:
-            candidates[old_idx] = [j for j in candidates[old_idx] if j not in used_new]
-    
-    # Step 4: Resolve conflicts using content + context similarity
-    matcher = LHDiffMatcher(old_lines, new_lines, w_content, w_context, threshold, radius, k)
-    changed_mapping = matcher.match_with_candidates(candidates, used_old, used_new)
-    
-    # Merge unchanged and changed mappings
-    final_mapping = {}
-    for old_idx, new_idx in unchanged_mapping.items():
-        final_mapping[old_idx] = [new_idx]
-    
-    for old_idx, new_idx in changed_mapping.items():
-        final_mapping[old_idx] = [new_idx]
-        used_old.add(old_idx)
-        used_new.add(new_idx)
-    
-    # Step 5: Detect line splits (optional)
-    if detect_splits_flag:
-        split_mapping = detect_splits(old_lines, new_lines, final_mapping, used_old, used_new)
-        final_mapping.update(split_mapping)
-    
-    # Convert to 1-indexed
-    result = {}
-    for old_idx, new_indices in final_mapping.items():
-        result[old_idx + 1] = [n + 1 for n in new_indices]
-    
-    return result
-
-
-# ============================================================================
-# OUTPUT FORMATTING
-# ============================================================================
-
-def format_mapping(mapping: Dict[int, List[int]]) -> List[str]:
-    """Format mapping for output"""
-    lines = []
-    for old_idx in sorted(mapping.keys()):
-        new_indices = mapping[old_idx]
-        if len(new_indices) == 1:
-            lines.append(f"{old_idx}->{new_indices[0]}")
+        if best_nj in owner:
+            prev_oi = owner[best_nj]
+            prev_s = scores.get((prev_oi, best_nj))
+            if prev_s is None:
+                prev_s, _, _ = combined_score(old_lines, new_lines, idf, old_ctx_vecs, new_ctx_vecs, prev_oi, best_nj, wc, wx)
+            if best_s > prev_s:
+                mapping.pop(prev_oi, None)
+                mapping[oi] = [best_nj]
+                owner[best_nj] = oi
         else:
-            new_str = ",".join(str(n) for n in new_indices)
-            lines.append(f"{old_idx}->{new_str}")
-    return lines
+            mapping[oi] = [best_nj]
+            owner[best_nj] = oi
 
+    return mapping, scores
 
-def save_mapping(mapping: Dict[int, List[int]], output_file: str):
-    """Save mapping to file"""
-    lines = format_mapping(mapping)
-    with open(output_file, 'w') as f:
-        f.write('\n'.join(lines) + '\n')
+# ===================== Step 5: Split detection (late stage) =====================
+def detect_splits(old_lines, new_lines, used_o, used_n, candidates, idf, r=4, threshold=0.55, wc=0.6, wx=0.4):
+    old_ctx_vecs = [bow(get_context(old_lines, i, r), idf) for i in range(len(old_lines))]
+    new_ctx_vecs = [bow(get_context(new_lines, j, r), idf) for j in range(len(new_lines))]
 
+    splits = {}
+    split_scores = {}
 
-def print_statistics(mapping: Dict[int, List[int]], old_file: str, new_file: str):
-    """Print statistics about the mapping"""
-    with open(old_file, 'r') as f:
-        old_lines = [l for l in f if l.strip()]
-    with open(new_file, 'r') as f:
-        new_lines = [l for l in f if l.strip()]
+    for oi in range(len(old_lines)):
+        if oi in used_o:
+            continue
+
+        # baseline: best single-line score from remaining candidates
+        best_single = 0.0
+        for nj in candidates.get(oi, []):
+            if nj in used_n:
+                continue
+            s, _, _ = combined_score(old_lines, new_lines, idf, old_ctx_vecs, new_ctx_vecs, oi, nj, wc, wx)
+            best_single = max(best_single, s)
+
+        target = strip_ws(old_lines[oi])
+        if not target:
+            continue
+
+        best_idxs = None
+        best_sim = best_single
+
+        for start in range(len(new_lines)):
+            if start in used_n:
+                continue
+
+            comb = ""
+            idxs = []
+            prev_sim = -1.0
+
+            for nj in range(start, len(new_lines)):
+                if nj in used_n:
+                    break
+                comb += strip_ws(new_lines[nj])
+                idxs.append(nj)
+
+                sim = nlev_sim(target, comb)
+
+                # stop if similarity decreases (per guideline idea)
+                if sim < prev_sim:
+                    break
+                prev_sim = sim
+
+                # accept split only if it beats best single-line and meets threshold
+                if len(idxs) > 1 and sim > best_sim and sim >= threshold:
+                    best_sim = sim
+                    best_idxs = idxs[:]
+
+                if len(comb) > int(1.5 * len(target)):
+                    break
+
+        if best_idxs:
+            splits[oi] = best_idxs
+            split_scores[oi] = best_sim
+            used_o.add(oi)
+            used_n.update(best_idxs)
+
+    return splits, split_scores
+
+# ===================== Ground truth evaluation (optional) =====================
+def parse_truth(path: str):
+    truth = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            s = s.replace("->", "-")
+            left, right = s.split("-", 1)
+            oi = int(left.strip())
+            njs = [int(x.strip()) for x in right.split(",") if x.strip()]
+            truth[oi] = njs
+    return truth
+
+def eval_against_truth(pred: dict, truth: dict):
+    total = len(truth)
+    correct = 0
+    for oi, gt in truth.items():
+        if pred.get(oi, []) == gt:
+            correct += 1
+
+    P = set((oi, nj) for oi, njs in pred.items() for nj in njs)
+    T = set((oi, nj) for oi, njs in truth.items() for nj in njs)
+    tp = len(P & T)
+    prec = tp / len(P) if P else 0.0
+    rec  = tp / len(T) if T else 0.0
+    f1 = 0.0 if (prec + rec) == 0 else 2 * prec * rec / (prec + rec)
+    acc = (correct / total * 100.0) if total else 0.0
+    return acc, correct, total, prec, rec, f1
+
+# ===================== MAIN LHDIFF =====================
+def lhdiff(old_fp, new_fp, k=15, radius=4, threshold=0.55, do_splits=True):
+    _, old_lines, o_map = read_kept(old_fp)
+    _, new_lines, n_map = read_kept(new_fp)
+
+    idf = build_idf(old_lines, new_lines)
+
+    unchanged, used_o, used_n = detect_unchanged(old_lines, new_lines)
+    candidates = generate_candidates(old_lines, new_lines, idf, k=k, r=radius)
+
+    # remove already-used new indices from candidates
+    for oi in range(len(old_lines)):
+        candidates[oi] = [nj for nj in candidates.get(oi, []) if nj not in used_n]
+
+    changed, pair_scores = resolve_matches(
+        old_lines, new_lines, candidates, used_o, used_n, idf,
+        r=radius, threshold=threshold, wc=0.6, wx=0.4
+    )
+    used_o.update(changed.keys())
+    used_n.update(nj for njs in changed.values() for nj in njs)
+
+    splits, split_scores = ({}, {})
+    if do_splits:
+        splits, split_scores = detect_splits(
+            old_lines, new_lines, used_o, used_n, candidates, idf,
+            r=radius, threshold=threshold, wc=0.6, wx=0.4
+        )
+
+    final = {}
+    final.update(unchanged)
+    final.update(changed)
+    final.update(splits)
+
+    # ===== NEW: Mark deletions and additions =====
+    # Deletions: old lines that have no mapping
+    deletions = {}
+    for oi in range(len(old_lines)):
+        if oi not in final:
+            deletions[oi] = []  # Empty list means deleted
     
+    # Additions: new lines that have no mapping
+    additions = {}
+    for nj in range(len(new_lines)):
+        if nj not in used_n:
+            additions[nj] = nj  # Track which new lines are additions
+
+    # Convert kept-index -> original-file line numbers (1-indexed)
+    out_map = {}
+    confs = []
+
+    # Add unchanged mappings
+    for oi, njs in unchanged.items():
+        if njs:
+            out_map[o_map[oi] + 1] = [n_map[njs[0]] + 1]
+            confs.append(1.0)
+
+    # Add changed mappings
+    for oi, njs in changed.items():
+        if njs:
+            nj = njs[0]
+            if nj < len(new_lines):
+                out_map[o_map[oi] + 1] = [n_map[nj] + 1]
+                confs.append(pair_scores.get((oi, nj), 0.0))
+
+    # Add split mappings
+    for oi, idxs in splits.items():
+        if idxs:
+            out_map[o_map[oi] + 1] = [n_map[nj] + 1 for nj in idxs if nj < len(new_lines)]
+            confs.append(split_scores.get(oi, threshold))
+
+    # Add deletions (old line -> -1)
+    for oi in deletions:
+        out_map[o_map[oi] + 1] = [-1]
+        confs.append(0.0)
+
+    # Add additions (- -> new line)
+    additions_list = []
+    for nj in sorted(additions.keys()):
+        additions_list.append(n_map[nj] + 1)
+
+    # "accuracy" without truth = coverage + confidence
     total_old = len(old_lines)
-    total_new = len(new_lines)
-    mapped = len(mapping)
-    splits = sum(1 for v in mapping.values() if len(v) > 1)
-    
-    print(f"\n{'='*60}")
-    print(f"LHDiff Statistics")
-    print(f"{'='*60}")
-    print(f"Old file lines:        {total_old}")
-    print(f"New file lines:        {total_new}")
-    print(f"Mapped lines:          {mapped}")
-    print(f"Unmapped old lines:    {total_old - mapped}")
-    print(f"Split lines detected:  {splits}")
-    print(f"Mapping coverage:      {mapped/total_old*100:.1f}%")
-    print(f"{'='*60}\n")
+    mapped_old = len(final)
+    coverage = (mapped_old / total_old * 100.0) if total_old else 0.0
+    avg_conf = sum(confs) / len(confs) if confs else 0.0
+    med_conf = median(confs) if confs else 0.0
 
+    stats = {
+        "old_nonempty": total_old,
+        "new_nonempty": len(new_lines),
+        "mapped_old": mapped_old,
+        "coverage": coverage,
+        "splits": len(splits),
+        "deletions": len(deletions),
+        "additions": len(additions),
+        "avg_conf": avg_conf,
+        "med_conf": med_conf,
+    }
+    return out_map, stats, additions_list
 
-# ============================================================================
-# COMMAND LINE INTERFACE
-# ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='LHDiff - Language-independent hybrid line mapping',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic usage
-  python lhdiff.py --old file_v1.py --new file_v2.py
-  
-  # Save output to file
-  python lhdiff.py --old file_v1.py --new file_v2.py --output mapping.txt
-  
-  # Adjust parameters
-  python lhdiff.py --old file_v1.py --new file_v2.py --threshold 0.6 --k 20
-  
-  # Disable split detection
-  python lhdiff.py --old file_v1.py --new file_v2.py --no-splits
-        """
+    ap = argparse.ArgumentParser(description="LHDiff - language-independent hybrid line mapping")
+    ap.add_argument("--old", required=True)
+    ap.add_argument("--new", required=True)
+    ap.add_argument("-o", "--out")
+    ap.add_argument("--k", type=int, default=15)
+    ap.add_argument("--radius", type=int, default=4)
+    ap.add_argument("--threshold", type=float, default=0.55)
+    ap.add_argument("--no-splits", action="store_true")
+    ap.add_argument("--truth", help="Optional truth mapping file to compute %%Correct, Precision, Recall, F1")
+    args = ap.parse_args()
+
+    mapping, stats, additions = lhdiff(
+        args.old, args.new,
+        k=args.k, radius=args.radius, threshold=args.threshold,
+        do_splits=not args.no_splits
     )
+
+    # ---- Accuracy output (required) ----
+    print("=" * 70)
+    print("LHDiff Results")
+    print("=" * 70)
+    print(f"Old lines (non-empty): {stats['old_nonempty']}")
+    print(f"New lines (non-empty): {stats['new_nonempty']}")
+    print(f"Mapped old lines:      {stats['mapped_old']} (Coverage: {stats['coverage']:.1f}%)")
+    print(f"Split mappings:        {stats['splits']}")
+    print(f"Deleted lines:         {stats['deletions']}")
+    print(f"Added lines:           {stats['additions']}")
+    print(f"Avg confidence:        {stats['avg_conf']:.3f}")
+    print(f"Median confidence:     {stats['med_conf']:.3f}")
+
+    if args.truth:
+        truth = parse_truth(args.truth)
+        acc, correct, total, prec, rec, f1 = eval_against_truth(mapping, truth)
+        print("\nGround Truth Evaluation")
+        print(f"%Correct (exact):      {acc:.1f}% ({correct}/{total})")
+        print(f"Precision (pairs):     {prec:.3f}")
+        print(f"Recall (pairs):        {rec:.3f}")
+        print(f"F1 (pairs):            {f1:.3f}")
+
+    # ---- Line mapping output (required) ----
+    print("\n" + "=" * 70)
+    print("Line Mapping")
+    print("=" * 70)
     
-    parser.add_argument('--old', required=True, help='Old version file path')
-    parser.add_argument('--new', required=True, help='New version file path')
-    parser.add_argument('--output', '-o', help='Output file for mapping')
-    parser.add_argument('--threshold', type=float, default=0.55,
-                       help='Similarity threshold (default: 0.55)')
-    parser.add_argument('--w-content', type=float, default=0.6,
-                       help='Weight for content similarity (default: 0.6)')
-    parser.add_argument('--w-context', type=float, default=0.4,
-                       help='Weight for context similarity (default: 0.4)')
-    parser.add_argument('--radius', type=int, default=4,
-                       help='Context radius in lines (default: 4)')
-    parser.add_argument('--k', type=int, default=15,
-                       help='Number of candidates per line (default: 15)')
-    parser.add_argument('--no-splits', action='store_true',
-                       help='Disable split detection')
-    parser.add_argument('--stats', action='store_true',
-                       help='Print detailed statistics')
+    lines = []
     
-    args = parser.parse_args()
-    
-    # Validate parameters
-    if args.w_content < 0 or args.w_context < 0:
-        parser.error("Weights must be non-negative")
-    if args.w_content + args.w_context == 0:
-        parser.error("At least one weight must be > 0")
-    
-    print(f"\nRunning LHDiff...")
-    print(f"Old file: {args.old}")
-    print(f"New file: {args.new}")
-    
-    # Run LHDiff
-    try:
-        mapping = lhdiff(
-            args.old,
-            args.new,
-            w_content=args.w_content,
-            w_context=args.w_context,
-            threshold=args.threshold,
-            radius=args.radius,
-            k=args.k,
-            detect_splits_flag=not args.no_splits
-        )
-        
-        # Print results
-        if args.stats:
-            print_statistics(mapping, args.old, args.new)
-        
-        lines = format_mapping(mapping)
-        
-        if args.output:
-            save_mapping(mapping, args.output)
-            print(f"✓ Mapping saved to: {args.output}")
+    # Sort and output all mappings
+    for old_ln in sorted(mapping.keys()):
+        new_lns = mapping[old_ln]
+        # deletion marker is -1
+        if new_lns == [-1]:
+            lines.append(f"{old_ln}->-1")
         else:
-            print(f"\nLine Mapping ({len(mapping)} matches):")
-            print("="*60)
-            for line in lines:
-                print(line)
-        
-        print(f"\n✓ LHDiff completed successfully!")
-        
-    except FileNotFoundError as e:
-        print(f"\n✗ Error: {e}")
-        return 1
-    except Exception as e:
-        print(f"\n✗ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+            lines.append(f"{old_ln}->{','.join(str(x) for x in new_lns)}")
     
-    return 0
+    # Output additions as 'old->+new' where 'old' is the nearest previous
+    # mapped old-line (1-indexed). If none found, fall back to '->+new'.
+    # `additions` is a list of new-file line numbers (1-indexed).
+    if additions:
+        # Build a helper map: old_line -> max mapped new_line (or None for deletions)
+        old_to_max_new = {}
+        mapped_old_lines = sorted(mapping.keys())
+        for old_ln in mapped_old_lines:
+            new_lns = mapping.get(old_ln, [])
+            nums = [n for n in new_lns if isinstance(n, int)]
+            old_to_max_new[old_ln] = max(nums) if nums else None
 
+        for new_ln in additions:
+            # find the largest old_ln whose max mapped new < new_ln
+            candidate = None
+            for old_ln in mapped_old_lines:
+                max_new = old_to_max_new.get(old_ln)
+                if max_new is None:
+                    continue
+                if max_new < new_ln:
+                    candidate = old_ln
+                else:
+                    break
 
-if __name__ == '__main__':
-    exit(main())
+            if candidate is not None:
+                lines.append(f"{candidate}->+1")
+            else:
+                lines.append(f"->+1")
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"Mapping saved to: {args.out}")
+    else:
+        for line in lines:
+            print(line)
+    
+    print("=" * 70)
+    print("✓ LHDiff completed successfully!")
+
+if __name__ == "__main__":
+    main()

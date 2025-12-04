@@ -374,17 +374,21 @@ def main():
     )
 
     # ---- Accuracy output (required) ----
+    # Print a single Accuracy value. If a ground-truth file is provided,
+    # use the exact %Correct from `eval_against_truth`. Otherwise compute
+    # a heuristic accuracy = coverage * avg_conf (both derived from stats).
+    if args.truth:
+        truth = parse_truth(args.truth)
+        acc, correct, total, prec, rec, f1 = eval_against_truth(mapping, truth)
+        accuracy_pct = acc
+    else:
+        # coverage is in percent, avg_conf in [0,1]; product is percent accuracy
+        accuracy_pct = stats['coverage'] * stats['avg_conf']
+
     print("=" * 70)
     print("LHDiff Results")
     print("=" * 70)
-    print(f"Old lines (non-empty): {stats['old_nonempty']}")
-    print(f"New lines (non-empty): {stats['new_nonempty']}")
-    print(f"Mapped old lines:      {stats['mapped_old']} (Coverage: {stats['coverage']:.1f}%)")
-    print(f"Split mappings:        {stats['splits']}")
-    print(f"Deleted lines:         {stats['deletions']}")
-    print(f"Added lines:           {stats['additions']}")
-    print(f"Avg confidence:        {stats['avg_conf']:.3f}")
-    print(f"Median confidence:     {stats['med_conf']:.3f}")
+    print(f"Accuracy: {accuracy_pct:.1f}%")
 
     if args.truth:
         truth = parse_truth(args.truth)
@@ -436,9 +440,9 @@ def main():
                     break
 
             if candidate is not None:
-                lines.append(f"{candidate}->+1")
+                lines.append(f"{candidate}->-1")
             else:
-                lines.append(f"->+1")
+                lines.append(f"->-1")
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

@@ -10,11 +10,12 @@ def analyze_data(values):
 
 def validate_and_log(x):
     if x > 0:
-        print("Valid value:", x)
+        return 1;
 
 def finalize():
     print("Finalizing : ") 
 
-if __name__ == "__main__":
-    data = [1, 2, 3, 4]          
-    analyze_data(data)
+
+
+
+

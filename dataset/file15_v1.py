@@ -17,3 +17,5 @@ def finalize():
 if __name__ == "__main__":
     data = [1, 2, 3]
     analyze_data(data)
+
+    

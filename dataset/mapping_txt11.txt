@@ -1,39 +1,32 @@
-OLD   NEW   STATUS
-1     1     SAME
-2     2     SAME
-3     -     REMOVED
--     3     ADDED
-4     4     SAME
-5     5     SAME
-6     6     SAME
-7     7     SAME
-8     8     SAME
-9     9     SAME
-10    10    SAME
-11    11    SAME
-12    12    SAME
-13    13    SAME
-14    -     REMOVED
--     14    ADDED
--     15    ADDED
--     16    ADDED
-15    17    SAME
-16    18    SAME
-17    19    SAME
-18    20    SAME
-19    -     REMOVED
--     21    ADDED
-20    22    SAME
-21    23    SAME
-22    24    SAME
-23    25    SAME
-24    26    SAME
-25    27    SAME
-26    28    SAME
-27    29    SAME
-28    30    SAME
-29    31    SAME
-30    32    SAME
-31    -     REMOVED
-32    33    SAME
--     34    ADDED
+1->1
+2->2
+3->3
+4->4
+5->5
+6->6
+7->7
+8->8
+9->9
+10->10
+11->11
+12->12
+13->13
+14->14,15,16
+15->17
+16->18
+17->19
+18->20
+19->21
+20->22
+21->23
+22->24
+23->25
+24->26
+25->27
+26->28
+27->29
+28->30
+29->31
+30->32
+31->-
+32->33

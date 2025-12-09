@@ -1,79 +1,42 @@
-from tkinter import *
-import datetime
 import time
-import winsound
-from threading import *
+from calendar import isleap
 
-root = Tk()
+# check leap year
+def is_leap(y):
+    return isleap(y)
 
-root.geometry("400x200")
+# get days in specific month
+def get_month_days(m, is_leap_yr):
+    days_map = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if is_leap_yr and m == 2:
+        return 29
+    return days_map[m]
 
-# Use Threading
-def Threading():
-	t1=Thread(target=alarm)
-	t1.start()
+if __name__ == '__main__':
+    user_name = input("input your name: ")
+    # Convert age immediately
+    user_age = int(input("input your age: "))
 
-def alarm():
-	# Infinite Loop
-	while True:
-		set_alarm_time = f"{hour.get()}:{minute.get()}:{second.get()}"
+    local_time = time.localtime(time.time())
 
-		time.sleep(1)
+    total_months = user_age * 12 + local_time.tm_mon
+    total_days = 0
 
-		current_time = datetime.datetime.now().strftime("%H:%M:%S")
-		print(current_time,set_alarm_time)
+    start_year = int(local_time.tm_year) - user_age
+    current_year = start_year + user_age
 
-		if current_time == set_alarm_time:
-			print("Time to Wake up")
+    # loop years
+    for y in range(start_year, current_year):
+        if is_leap(y):
+            total_days += 366
+        else:
+            total_days += 365
 
-			sound_file = "sound.wav"     # split line 1
-			winsound.PlaySound(sound_file,winsound.SND_ASYNC)  # split line 2
+    is_current_leap = is_leap(local_time.tm_year)
+    for m in range(1, local_time.tm_mon):
+        total_days += get_month_days(m, is_current_leap)
 
-# Add Labels, Frame, Button, Optionmenus
-Label(root,text="Alarm Clock",font=("Helvetica 20 bold"),fg="red").pack(pady=10)
-Label(root,text="Set Time",font=("Helvetica 15 bold")).pack()
+    total_days += local_time.tm_mday
 
-frame = Frame(root)
-frame.pack()
-
-hour = StringVar(root)
-hours = ('00', '01', '02', '03', '04', '05', '06', '07',
-		'08', '09', '10', '11', '12', '13', '14', '15',
-		'16', '17', '18', '19', '20', '21', '22', '23', '24'
-		)
-hour.set(hours[0])
-
-hrs = OptionMenu(frame, hour, *hours)
-hrs.pack(side=LEFT)
-
-minute = StringVar(root)
-minutes = ('00', '01', '02', '03', '04', '05', '06', '07',
-		'08', '09', '10', '11', '12', '13', '14', '15',
-		'16', '17', '18', '19', '20', '21', '22', '23',
-		'24', '25', '26', '27', '28', '29', '30', '31',
-		'32', '33', '34', '35', '36', '37', '38', '39',
-		'40', '41', '42', '43', '44', '45', '46', '47',
-		'48', '49', '50', '51', '52', '53', '54', '55',
-		'56', '57', '58', '59', '60')
-minute.set(minutes[0])
-
-mins = OptionMenu(frame, minute, *minutes)
-mins.pack(side=LEFT)
-
-second = StringVar(root)
-seconds = ('00', '01', '02', '03', '04', '05', '06', '07',
-		'08', '09', '10', '11', '12', '13', '14', '15',
-		'16', '17', '18', '19', '20', '21', '22', '23',
-		'24', '25', '26', '27', '28', '29', '30', '31',
-		'32', '33', '34', '35', '36', '37', '38', '39',
-		'40', '41', '42', '43', '44', '45', '46', '47',
-		'48', '49', '50', '51', '52', '53', '54', '55',
-		'56', '57', '58', '59', '60')
-second.set(seconds[0])
-
-secs = OptionMenu(frame, second, *seconds)
-secs.pack(side=LEFT)
-
-Button(root,text="Set Alarm",font=("Helvetica 15"),command=Threading).pack(pady=20)
-
-root.mainloop()
+    print(f"{user_name}'s age is {user_age} years or ", end="")
+    print(f"{total_months} months or {total_days} days")

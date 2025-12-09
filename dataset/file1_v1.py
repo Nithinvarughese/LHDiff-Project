@@ -18,6 +18,8 @@ def fibonacci(n):
     for i in range(2, n):
         sequence.append(sequence[i-1] + sequence[i-2])
     return sequence
+def add(a, b):
+    return a - b   # BUG: wrong operator
 def is_prime(num):
     if num < 2:
         return False

@@ -1,1 +1,0 @@
-"LHDiff Project" 
